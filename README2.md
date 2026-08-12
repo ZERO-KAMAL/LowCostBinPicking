@@ -80,13 +80,13 @@ This is done outside of this project, using a free website called
 This teaches the computer to recognize your object on its own.
 
 ```bash
-python src/train_yolo.py --data configs/data_chocolate.yaml --model yolov8n-seg.pt --epochs 100 --imgsz 640 --name chocolate_yolov8n
+python src/train_yolo.py --data configs/data.yaml --model yolov8n-seg.pt --epochs 100 --imgsz 640 --name nut_v2
 ```
 
 - This takes a while (could be minutes to hours depending on your computer).
 - When it's done, your trained model will be saved at:
   ```
-  runs/segment/chocolate_yolov8n/weights/best.pt
+  runs/segment/nut_v2/weights/best.pt
   ```
 - You only need to do this once, unless you want to retrain with new
   pictures later.
