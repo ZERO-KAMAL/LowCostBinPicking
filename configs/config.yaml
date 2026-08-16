@@ -10,7 +10,7 @@ workspace:
   # ROI as fractions of the full frame: [x, y, width, height]
   # Example: start at 15% from left, 10% from top, cover 70% width, 80% height.
   # roi: [0.15, 0.10, 0.70, 0.80]
-  #roi: [0.25, 0.25, 0.50, 0.50]
+  # roi: [0.25, 0.25, 0.50, 0.50]
    roi: [0.28, 0.20, 0.36, 0.64]
 
 model:

@@ -16,6 +16,11 @@ import time
 HOST = "127.0.0.1"
 PORT = 30002
 
+# ---- FIXED VALUES for your setup (adjust once, based on real measurements) ----
+FIXED_Z_MM = 400          # constant pick height
+GRIPPER_RX = 3.14         # gripper pointing straight down (adjust to your real setup)
+GRIPPER_RY = 0.0
+
 
 def send_pick_position(x_mm, y_mm, z_mm, rx, ry, rz, acceleration=0.5, velocity=0.2):
     """
@@ -54,23 +59,20 @@ def send_pick_position(x_mm, y_mm, z_mm, rx, ry, rz, acceleration=0.5, velocity=
 
 
 if __name__ == "__main__":
-    # EXAMPLE values only — replace these with real numbers from your
-    # calibration + PCA pipeline once that's connected.
-    #
-    # Start with SMALL, SAFE test values first (close to the robot's home
-    # position) before trying real bin-picking coordinates, so you can
-    # confirm it moves correctly without any risk of a large/unexpected move.
+    # EXAMPLE values only — used only when running this file directly for testing.
+    # When imported by live_bin_picking.py, this block is skipped, and the real
+    # camera-detected X/Y/angle values are used instead.
 
-    example_x_mm = 200     # example: 300mm from robot base
-    example_y_mm = 50
-    example_z_mm = 200     # example: 400mm above robot base
-    example_rz = 0.0       # example: no rotation
+    example_x_mm = 300
+    example_y_mm = 0
+    example_z_mm = 400
+    example_rz = 0.0
 
     send_pick_position(
         x_mm=example_x_mm,
         y_mm=example_y_mm,
         z_mm=example_z_mm,
-        rx=3.14,   # gripper pointing down (example value, adjust based on your setup)
+        rx=3.14,
         ry=0.0,
         rz=example_rz,
     )

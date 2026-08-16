@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import math
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -13,6 +14,7 @@ from calibrate import load_calibration, pixel_to_mm
 from depth_estimator import DepthEstimator, masked_depth_value
 from pca_pose import draw_pose, mask_to_pose
 from utils import apply_roi, load_config, normalize_depth
+from send_pick_position import send_pick_position, FIXED_Z_MM, GRIPPER_RX, GRIPPER_RY
 
 
 def score_object(confidence: float, area_px: int, depth_value: Optional[float], cfg: Dict[str, Any]) -> float:
@@ -169,6 +171,29 @@ def main() -> None:
             shot = Path("outputs") / f"screenshot_{frame_idx}.jpg"
             cv2.imwrite(str(shot), annotated)
             print(f"Saved {shot}")
+
+        if key == ord("p"):
+            # Manual trigger: send the current best pick to the robot.
+            # Only fires once per keypress, not every frame, to avoid
+            # flooding the robot with move commands.
+            if candidates and H is not None:
+                best = max(candidates, key=lambda c: c["score"])
+                p = best["pose"]
+                x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
+                rz = math.radians(p.angle_deg)
+                print(f"Sending pick to robot: x={x_mm:.1f}mm y={y_mm:.1f}mm angle={p.angle_deg:.1f}deg")
+                send_pick_position(
+                    x_mm=x_mm,
+                    y_mm=y_mm,
+                    z_mm=FIXED_Z_MM,
+                    rx=GRIPPER_RX,
+                    ry=GRIPPER_RY,
+                    rz=rz,
+                )
+            elif H is None:
+                print("Cannot send pick: no calibration loaded. Run calibrate.py first.")
+            else:
+                print("Cannot send pick: no object currently detected.")
 
         frame_idx += 1
 
