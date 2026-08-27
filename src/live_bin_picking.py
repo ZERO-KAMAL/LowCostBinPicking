@@ -14,10 +14,19 @@ from calibrate import load_calibration, pixel_to_mm
 from depth_estimator import DepthEstimator, masked_depth_value
 from pca_pose import draw_pose, mask_to_pose
 from utils import apply_roi, load_config, normalize_depth
-from send_pick_position import send_pick_position, FIXED_Z_MM, GRIPPER_RX, GRIPPER_RY
+from send_pick_position import send_pick_position, APPROACH_Z_MM, GRIPPER_RX, GRIPPER_RY
 
 
 def score_object(confidence: float, area_px: int, depth_value: Optional[float], cfg: Dict[str, Any]) -> float:
+    """Score a candidate object for "best pick" (topmost object) selection.
+
+    Depth is still used here to judge which object is on top of the pile -
+    that's a separate question from what Z height the robot moves to. The
+    robot no longer trusts a vision-estimated Z; it finds the real pick
+    height by feel via the UR5's force/torque sensor (see
+    send_pick_position.py). Depth's job is only to help pick WHICH object,
+    not HOW FAR DOWN to reach for it.
+    """
     weights = cfg["pick_selection"]
     area_score = min(area_px / 20000.0, 1.0)
     conf_score = confidence
@@ -32,7 +41,7 @@ def score_object(confidence: float, area_px: int, depth_value: Optional[float], 
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Live 2D bin picking: YOLO mask + PCA + optional depth.")
+    parser = argparse.ArgumentParser(description="Live 2D bin picking: YOLO mask + PCA + depth (best-pick only). Robot Z found via force-sensor contact (see send_pick_position.py).")
     parser.add_argument("--config", default="configs/config.yaml")
     parser.add_argument("--weights", default=None, help="Path to trained best.pt")
     parser.add_argument("--source", default=None, help="Camera index or image/video path.")
@@ -181,14 +190,15 @@ def main() -> None:
                 p = best["pose"]
                 x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
                 rz = math.radians(p.angle_deg)
-                print(f"Sending pick to robot: x={x_mm:.1f}mm y={y_mm:.1f}mm angle={p.angle_deg:.1f}deg")
+                print(f"Sending pick to robot: x={x_mm:.1f}mm y={y_mm:.1f}mm angle={p.angle_deg:.1f}deg "
+                      f"(pick height found via force-sensor contact, not vision)")
                 send_pick_position(
                     x_mm=x_mm,
                     y_mm=y_mm,
-                    z_mm=FIXED_Z_MM,
                     rx=GRIPPER_RX,
                     ry=GRIPPER_RY,
                     rz=rz,
+                    approach_z_mm=APPROACH_Z_MM,
                 )
             elif H is None:
                 print("Cannot send pick: no calibration loaded. Run calibrate.py first.")
