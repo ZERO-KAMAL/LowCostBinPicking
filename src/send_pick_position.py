@@ -1,23 +1,28 @@
 """
-POSITION TEST VERSION - hover only.
+Pick motion for a UR5 with a Robotiq 2F gripper and wrist camera.
 
-The robot moves to the approach height directly above the (x, y) the camera
-detected, and stops there. No descend, no gripper, no drop.
+WHAT THIS DOES
+  p -> move above the detected (x, y) at APPROACH_Z_MM, descend straight down
+       to PICK_Z_MM, pause, lift back up to APPROACH_Z_MM.
+  h -> move to HOME_POSE (parked clear of the camera view).
+  d -> move to DROP_POSE.
 
-send_home() moves the arm to a fixed parked position, clear of the camera view.
+WHAT THIS DOES NOT DO
+  No gripper. The Robotiq 2F is not driven by set_digital_out - it needs the
+  Robotiq URCap on the pendant, or a Modbus/RTDE connection.
 
-The full pick-and-place URScript is kept below, commented out, so it can be
-restored once positioning is verified.
+  No force sensing. The descend goes to a FIXED height, so it works for objects
+  lying on the bin floor. Objects sitting on top of a pile are higher than
+  PICK_Z_MM, so the gripper would push into them. This is the known limit of a
+  2D camera: it gives X and Y, but no height.
 
 COORDINATE FRAME
-The x_mm / y_mm sent here must already be in the ROBOT BASE frame. That is what
-calibrate.py produces if you passed pendant X/Y readings (Feature = Base) as
---world-points.
+x_mm / y_mm must be in the ROBOT BASE frame - what calibrate.py produces when
+given pendant X/Y readings with Feature = Base.
 
 SAFETY
-send_stop() is a convenience, NOT a safety device. It only works if the script
-is running and the network is up. The physical red emergency stop button is the
-real safety mechanism - keep a hand near it whenever the arm moves.
+send_stop() is a convenience, not a safety device. The physical red emergency
+stop is the real one - keep a hand near it whenever the arm moves.
 """
 
 import socket
@@ -28,19 +33,18 @@ PORT = 30002              # URScript secondary interface
 
 # ---- Heights (mm, robot BASE frame). Measured by jogging the robot. ----
 APPROACH_Z_MM = 150       # safe hover height above the bin
-PICK_Z_MM = 30            # unused in hover mode; kept for the full sequence
+PICK_Z_MM = 50            # height where the gripper meets an object on the floor
 
 # ---- Tool orientation (rotation vector, radians), measured on the pendant. ----
 GRIPPER_RX = 2.866
 GRIPPER_RY = -1.214
 
-# ---- Robotiq 2F gripper. NOT a digital output - needs URCap or Modbus/RTDE. ----
-# The set_digital_out lines in the commented block below will NOT drive a
-# Robotiq 2F. Left in place only as a placeholder for a valve-type gripper.
-GRIPPER_DO = 0
-GRIPPER_ACTIVE_HIGH = True
-GRIP_WAIT_S = 0.6
-RELEASE_WAIT_S = 0.4
+# Added to the PCA angle before sending as RZ. A parallel gripper closes ACROSS
+# the object, so this is usually near 90 deg (1.5708 rad), plus any rotation
+# between the camera and robot axes. To measure: hover over an object, jog the
+# wrist until the fingers align to grasp it, then subtract the image angle in
+# radians from the pendant RZ. Leave at 0.0 until measured.
+RZ_OFFSET = 0.0
 
 # ---- Fixed poses (metres + radians, BASE frame), measured by jogging. ----
 DROP_POSE = [-0.206, -0.306, 0.150, 2.866, -1.214, 0.069]
@@ -52,8 +56,10 @@ JOINT_VEL = 0.1
 LINEAR_ACC = 0.3
 LINEAR_VEL = 0.05
 
-# Deceleration used by send_stop(), in rad/s^2.
-STOP_DECEL = 2.0
+# Seconds to pause at the bottom, so you can see where the gripper landed.
+PAUSE_AT_PICK_S = 1.0
+
+STOP_DECEL = 2.0          # rad/s^2 for send_stop()
 
 
 def _pose(x, y, z, rx, ry, rz):
@@ -95,22 +101,21 @@ def send_stop() -> None:
 
 def send_home() -> None:
     """Move the arm to HOME_POSE - parked clear of the camera view."""
-    home = _pose(*HOME_POSE)
     script = (
         "def go_home():\n"
-        f"  movej({home}, a={JOINT_ACC}, v={JOINT_VEL})\n"
+        f"  movej({_pose(*HOME_POSE)}, a={JOINT_ACC}, v={JOINT_VEL})\n"
         "  popup(\"At home\", \"Home\", False, False, False)\n"
         "end\n"
     )
     print("Moving to home position.")
     _send(script, "Home command")
 
+
 def send_drop() -> None:
     """Move the arm to DROP_POSE."""
-    drop = _pose(*DROP_POSE)
     script = (
         "def go_drop():\n"
-        f"  movej({drop}, a={JOINT_ACC}, v={JOINT_VEL})\n"
+        f"  movej({_pose(*DROP_POSE)}, a={JOINT_ACC}, v={JOINT_VEL})\n"
         "  popup(\"At drop\", \"Drop\", False, False, False)\n"
         "end\n"
     )
@@ -122,58 +127,41 @@ def send_pick_position(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
                        acceleration=JOINT_ACC, velocity=JOINT_VEL,
                        approach_z_mm=APPROACH_Z_MM, **_ignored):
     """
-    Hover above (x_mm, y_mm) at approach_z_mm, then stop.
+    Move above (x_mm, y_mm), descend straight down to PICK_Z_MM, pause, lift.
 
-    approach_z_mm defaults to APPROACH_Z_MM but can be passed by the caller.
-    Unexpected keyword arguments are ignored so older callers do not crash.
+    movej for the approach (fastest path), movel for the vertical moves so the
+    gripper travels straight down and up rather than sweeping sideways into
+    neighbouring objects.
     """
     x_m = x_mm / 1000.0
     y_m = y_mm / 1000.0
     z_approach = approach_z_mm / 1000.0
+    z_pick = PICK_Z_MM / 1000.0
+    rz_cmd = rz + RZ_OFFSET
 
-    approach = _pose(x_m, y_m, z_approach, rx, ry, rz)
+    approach = _pose(x_m, y_m, z_approach, rx, ry, rz_cmd)
+    pick = _pose(x_m, y_m, z_pick, rx, ry, rz_cmd)
 
-    urscript_command = (
-        "def hover_above():\n"
+    script = (
+        "def pick_move():\n"
         f"  movej({approach}, a={acceleration}, v={velocity})\n"
-        "  popup(\"Hover position reached\", \"Position test\", False, False, False)\n"
+        f"  movel({pick}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        f"  sleep({PAUSE_AT_PICK_S})\n"
+        f"  movel({approach}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        "  popup(\"Pick move done\", \"Pick\", False, False, False)\n"
         "end\n"
     )
 
-    # ---- FULL PICK-AND-PLACE (restore once hovering is verified) ----
-    # NOTE: set_digital_out does NOT drive a Robotiq 2F. That gripper needs its
-    # URCap or a Modbus/RTDE connection. Replace those lines before using this.
-    #
-    # z_pick = PICK_Z_MM / 1000.0
-    # pick = _pose(x_m, y_m, z_pick, rx, ry, rz)
-    # drop = _pose(*DROP_POSE)
-    # home = _pose(*HOME_POSE)
-    # grip_on = "True" if GRIPPER_ACTIVE_HIGH else "False"
-    # grip_off = "False" if GRIPPER_ACTIVE_HIGH else "True"
-    # urscript_command = (
-    #     "def pick_and_place():\n"
-    #     f"  set_digital_out({GRIPPER_DO}, {grip_off})\n"
-    #     f"  movej({approach}, a={acceleration}, v={velocity})\n"
-    #     f"  movel({pick}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
-    #     f"  set_digital_out({GRIPPER_DO}, {grip_on})\n"
-    #     f"  sleep({GRIP_WAIT_S})\n"
-    #     f"  movel({approach}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
-    #     f"  movej({drop}, a={acceleration}, v={velocity})\n"
-    #     f"  set_digital_out({GRIPPER_DO}, {grip_off})\n"
-    #     f"  sleep({RELEASE_WAIT_S})\n"
-    #     f"  movej({home}, a={acceleration}, v={velocity})\n"
-    #     "end\n"
-    # )
+    print(f"PICK at X={x_mm:.1f}mm Y={y_mm:.1f}mm  "
+          f"approach Z={approach_z_mm}mm -> pick Z={PICK_Z_MM}mm  "
+          f"rz={rz_cmd:.3f}rad. No gripper.")
 
-    print(f"HOVER above X={x_mm:.1f}mm Y={y_mm:.1f}mm at Z={approach_z_mm}mm "
-          f"(rz={rz:.3f}rad). No descend, no gripper.")
-
-    _send(urscript_command, "Hover command")
+    _send(script, "Pick command")
     print("Watch the arm - hand on the emergency stop.")
 
 
 if __name__ == "__main__":
-    # Manual test. Coordinate inside the bin, robot base mm.
+    # Manual test with a coordinate inside the bin, robot base mm.
     try:
         send_pick_position(x_mm=-450.0, y_mm=-165.0, rz=0.069)
     except KeyboardInterrupt:

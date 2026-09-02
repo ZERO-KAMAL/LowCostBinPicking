@@ -171,7 +171,7 @@ def main() -> None:
                     writer = cv2.VideoWriter(args.save, fourcc, 20.0, (annotated.shape[1], annotated.shape[0]))
                 writer.write(annotated)
 
-            cv2.imshow("2D Bin Picking - q quit, s screenshot, p pick, h home", annotated)
+            cv2.imshow("2D Bin Picking - q quit, s shot, p pick, h home, d drop", annotated)
             key = cv2.waitKey(1) & 0xFF
             if key == ord("q"):
                 break
@@ -207,9 +207,10 @@ def main() -> None:
             if key == ord("h"):
                 # Send the arm to the parked home position, clear of the camera.
                 send_home()
-                
+
             if key == ord("d"):
-                send_drop()    
+                # Send the arm to the drop position.
+                send_drop()
 
             frame_idx += 1
 
