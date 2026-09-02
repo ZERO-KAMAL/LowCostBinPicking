@@ -40,6 +40,65 @@ def score_object(confidence: float, area_px: int, depth_value: Optional[float], 
     )
 
 
+def select_locked_target(
+    candidates: List[Dict[str, Any]],
+    locked: Optional[Dict[str, Any]],
+    lock_dist_px: float = 80.0,
+    switch_margin: float = 0.15,
+    max_lost_frames: int = 10,
+) -> Optional[Dict[str, Any]]:
+    """Pick the "best" candidate, but stay locked onto the SAME physical
+    object across frames instead of re-choosing the global max every frame.
+
+    Without this, near-tied scores cause the target to flicker between
+    objects frame to frame from ordinary detection/depth noise - annoying
+    to watch and risky to act on mid-pick.
+
+    Logic:
+      - If nothing was locked yet, lock onto whichever candidate scores best.
+      - If something IS locked, try to find it again by nearest position
+        (same physical object moves only a little between frames).
+        - Found nearby -> keep tracking it, refresh its data.
+        - Not found -> count a "lost" frame; drop the lock after too many.
+      - Only switch to a different object if it's NOT the locked one AND it
+        beats the locked score by more than `switch_margin` - small score
+        differences are not enough reason to jump targets.
+    """
+    if not candidates:
+        return None
+
+    def dist(a, b) -> float:
+        return math.hypot(a.center_x - b.center_x, a.center_y - b.center_y)
+
+    if locked is None:
+        best = max(candidates, key=lambda c: c["score"])
+        best["lost_frames"] = 0
+        return best
+
+    # Try to re-find the locked object by nearest position.
+    nearby = [c for c in candidates if dist(c["pose"], locked["pose"]) < lock_dist_px]
+    if nearby:
+        refreshed = max(nearby, key=lambda c: c["score"])
+        refreshed["lost_frames"] = 0
+        locked = refreshed
+    else:
+        locked["lost_frames"] = locked.get("lost_frames", 0) + 1
+        if locked["lost_frames"] > max_lost_frames:
+            # Locked object is gone (picked, moved, occluded too long) - release the lock.
+            best = max(candidates, key=lambda c: c["score"])
+            best["lost_frames"] = 0
+            return best
+
+    # Consider switching only to a genuinely different, clearly-better object.
+    alt_best = max(candidates, key=lambda c: c["score"])
+    is_same_object = dist(alt_best["pose"], locked["pose"]) < lock_dist_px
+    if not is_same_object and alt_best["score"] > locked["score"] + switch_margin:
+        alt_best["lost_frames"] = 0
+        return alt_best
+
+    return locked
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live 2D bin picking: YOLO mask + PCA + depth (best-pick only). Robot Z found via force-sensor contact (see send_pick_position.py).")
     parser.add_argument("--config", default="configs/config.yaml")
@@ -87,6 +146,7 @@ def main() -> None:
     depth_map: Optional[np.ndarray] = None
     frame_idx = 0
     fps_smoothed: Optional[float] = None
+    locked_target: Optional[Dict[str, Any]] = None
 
     while True:
         t0 = time.perf_counter()
@@ -137,11 +197,13 @@ def main() -> None:
                     label += f" z={dval:.2f}"
                 annotated = draw_pose(annotated, pose, label)
 
-        if candidates:
-            best = max(candidates, key=lambda c: c["score"])
+        locked_target = select_locked_target(candidates, locked_target)
+
+        if locked_target is not None:
+            best = locked_target
             p = best["pose"]
             cv2.circle(annotated, (int(p.center_x), int(p.center_y)), 13, (0, 0, 255), 3)
-            cv2.putText(annotated, "BEST PICK", (int(p.center_x) + 15, int(p.center_y) + 20),
+            cv2.putText(annotated, "BEST PICK (locked)", (int(p.center_x) + 15, int(p.center_y) + 20),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
 
             if H is not None:
@@ -182,11 +244,11 @@ def main() -> None:
             print(f"Saved {shot}")
 
         if key == ord("p"):
-            # Manual trigger: send the current best pick to the robot.
-            # Only fires once per keypress, not every frame, to avoid
-            # flooding the robot with move commands.
-            if candidates and H is not None:
-                best = max(candidates, key=lambda c: c["score"])
+            # Manual trigger: send the CURRENTLY LOCKED pick to the robot.
+            # Uses locked_target (not a fresh max) so the sent pose matches
+            # exactly what's been shown on screen as "BEST PICK (locked)".
+            if locked_target is not None and H is not None:
+                best = locked_target
                 p = best["pose"]
                 x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
                 rz = math.radians(p.angle_deg)
