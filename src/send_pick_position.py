@@ -58,7 +58,7 @@ TRANSIT_Z_MM = 280
 # something. Confirmed on hardware: 10/12 never triggered, 15/8 did.
 PUSH_FORCE_N = 15.0       # downward force applied while searching
 CONTACT_FORCE_N = 8.0     # force that counts as "touched the object"
-DESCEND_SPEED = 0.02      # m/s, max speed of the compliant descent. Keep slow.
+DESCEND_SPEED = 0.04      # m/s, max speed of the compliant descent. Keep slow.
 DESCEND_TIMEOUT_S = 20.0  # confirmed on hardware: 8s was too short for a full
                           # descent from approach height to the floor
 
@@ -83,10 +83,10 @@ HOME_POSE = [-0.205, -0.1362, 0.280, 2.866, -1.214, 0.069]
 # BLOWOFF_S = 0.3         # how long to puff air to release the part
 
 # ---- Motion speeds. Keep LOW while testing. -------------------------------
-JOINT_ACC = 0.3
-JOINT_VEL = 0.1
-LINEAR_ACC = 0.3
-LINEAR_VEL = 0.05
+JOINT_ACC = 0.5
+JOINT_VEL = 0.2
+LINEAR_ACC = 0.4
+LINEAR_VEL = 0.15
 
 STOP_DECEL = 2.0          # rad/s^2 for send_stop()
 
