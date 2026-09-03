@@ -10,10 +10,8 @@ workspace:
   # ROI as fractions of the full frame: [x, y, width, height]
   # Example: start at 15% from left, 10% from top, cover 70% width, 80% height.
   # roi: [0.15, 0.10, 0.70, 0.80]
-  # roi: [0.25, 0.25, 0.50, 0.50]
-  #  roi: [0.28, 0.20, 0.36, 0.64]
-    #  roi: [0.28, 0.20, 0.27, 0.60]
-     roi: [0.29, 0.20, 0.18, 0.52]
+    #  roi: [0.29, 0.20, 0.18, 0.52]
+     roi: [0.29, 0.10, 0.40, 0.40]
 
 model:
   yolo_weights: models/best.pt
@@ -21,12 +19,12 @@ model:
   image_size: 640
 
 depth:
-  enabled: true                 # set true only after Depth Anything V2 setup (README section 11)
+  enabled: false                 # set true only after Depth Anything V2 setup (README section 11)
   method: depth_anything_v2      # none | depth_anything_v2
   model_path: external/models/depth_anything_v2_vits.pth
   # model_path: external/models/depth_anything_v2_vits.pth
   encoder: vits                  # vits | vitb | vitl
-  every_n_frames: 5              # run depth only every Nth frame to keep live FPS usable
+  every_n_frames: 15              # run depth only every Nth frame to keep live FPS usable
 
 pick_selection:
   min_mask_area_px: 400          # ignore tiny noise masks

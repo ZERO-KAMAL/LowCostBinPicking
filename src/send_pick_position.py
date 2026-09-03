@@ -41,7 +41,7 @@ PC_IP = None
 
 # ---- Heights (mm, robot BASE frame). Measured by jogging the robot. --------
 APPROACH_Z_MM = 150       # safe hover height above the bin
-PICK_Z_FLOOR_MM = 25      # absolute lowest Z the descent is allowed to reach
+PICK_Z_FLOOR_MM = 35      # measured on hardware: real floor was ~32mm, +margin
 RETREAT_Z_MM = 150        # height to lift back to right after grabbing
 
 # Height for ALL horizontal travel between stations. Must clear the bin walls,
@@ -51,10 +51,16 @@ RETREAT_Z_MM = 150        # height to lift back to right after grabbing
 TRANSIT_Z_MM = 280
 
 # ---- Force settings -------------------------------------------------------
-CONTACT_FORCE_N = 12.0    # force that counts as "touched the object"
-PUSH_FORCE_N = 10.0       # downward force applied while searching
+# PUSH_FORCE_N MUST be higher than CONTACT_FORCE_N. If the push force is too
+# low, the arm rests gently against a surface without ever generating enough
+# resistance to cross the contact threshold - it just sits there until the
+# timeout, which looks identical to "no contact" even when it IS touching
+# something. Confirmed on hardware: 10/12 never triggered, 15/8 did.
+PUSH_FORCE_N = 15.0       # downward force applied while searching
+CONTACT_FORCE_N = 8.0     # force that counts as "touched the object"
 DESCEND_SPEED = 0.02      # m/s, max speed of the compliant descent. Keep slow.
-DESCEND_TIMEOUT_S = 8.0   # give up on the descent after this long
+DESCEND_TIMEOUT_S = 20.0  # confirmed on hardware: 8s was too short for a full
+                          # descent from approach height to the floor
 
 # ---- Tool orientation (rotation vector, radians), measured on the pendant. -
 GRIPPER_RX = 2.866
@@ -77,14 +83,10 @@ HOME_POSE = [-0.2058, -0.1362, 0.280, 2.866, -1.214, 0.069]
 # BLOWOFF_S = 0.3         # how long to puff air to release the part
 
 # ---- Motion speeds. Keep LOW while testing. -------------------------------
-# JOINT_ACC = 0.3
-# JOINT_VEL = 0.1
-# LINEAR_ACC = 0.3
-# LINEAR_VEL = 0.05
-JOINT_ACC = 0.5
-JOINT_VEL = 0.2
-LINEAR_ACC = 0.4
-LINEAR_VEL = 0.12
+JOINT_ACC = 0.3
+JOINT_VEL = 0.1
+LINEAR_ACC = 0.3
+LINEAR_VEL = 0.05
 
 STOP_DECEL = 2.0          # rad/s^2 for send_stop()
 
@@ -199,11 +201,12 @@ def send_home() -> None:
     script = (
         "def go_home():\n"
         # Lift straight up from wherever the arm currently is, BEFORE any
-        # horizontal travel. Pressing 'h' with the tool down in the bin used to
-        # swing it sideways through the bin wall.
+        # horizontal travel. Build a NEW pose rather than assigning into an
+        # index of the existing one - some PolyScope versions reject
+        # 'cur[2] = value' with "expected type float but found pose".
         "  cur = get_actual_tcp_pose()\n"
-        f"  cur[2] = {TRANSIT_Z_MM / 1000.0:.4f}\n"
-        f"  movel(cur, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        f"  up = p[cur[0], cur[1], {TRANSIT_Z_MM / 1000.0:.4f}, cur[3], cur[4], cur[5]]\n"
+        f"  movel(up, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         f"  movej({_pose_at(HOME_POSE, TRANSIT_Z_MM)}, a={JOINT_ACC}, v={JOINT_VEL})\n"
         f"  movel({_pose(*HOME_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         f'  socket_open("{_local_ip()}", {FEEDBACK_PORT}, "pc")\n'
@@ -220,8 +223,8 @@ def send_drop() -> None:
     script = (
         "def go_drop():\n"
         "  cur = get_actual_tcp_pose()\n"
-        f"  cur[2] = {TRANSIT_Z_MM / 1000.0:.4f}\n"
-        f"  movel(cur, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        f"  up = p[cur[0], cur[1], {TRANSIT_Z_MM / 1000.0:.4f}, cur[3], cur[4], cur[5]]\n"
+        f"  movel(up, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         f"  movej({_pose_at(DROP_POSE, TRANSIT_Z_MM)}, a={JOINT_ACC}, v={JOINT_VEL})\n"
         f"  movel({_pose(*DROP_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         # ---- SUCTION: release the part -------------------------------------

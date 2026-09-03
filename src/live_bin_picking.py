@@ -147,7 +147,6 @@ def main() -> None:
                 roi_frame,
                 conf=cfg["model"]["confidence"],
                 imgsz=cfg["model"]["image_size"],
-                device="mps",
                 verbose=False,
             )[0]
 

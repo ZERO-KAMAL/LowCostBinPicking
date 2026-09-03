@@ -43,7 +43,8 @@ class DepthEstimator:
         }
         config = model_configs.get(self.encoder, model_configs["vits"])
         # self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.device = "cpu"
+        # self.device = "cpu"
+        self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.model = DepthAnythingV2(**config)
         self.model.load_state_dict(torch.load(self.model_path, map_location="cpu"))
         self.model = self.model.to(self.device).eval()
