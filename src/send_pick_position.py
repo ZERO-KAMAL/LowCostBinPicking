@@ -73,7 +73,7 @@ RZ_OFFSET = 0.0
 
 # ---- Fixed poses (metres + radians, BASE frame), measured by jogging. ------
 DROP_POSE = [-0.206, -0.306, 0.150, 2.866, -1.214, 0.069]
-HOME_POSE = [-0.2058, -0.1362, 0.280, 2.866, -1.214, 0.069]
+HOME_POSE = [-0.205, -0.1362, 0.280, 2.866, -1.214, 0.069]
 
 # ---- SUCTION wiring (COMMENTED OUT FOR NOW) -------------------------------
 # VACUUM_OUT = 0          # digital output driving the vacuum solenoid valve
@@ -162,6 +162,10 @@ def _send_and_wait(urscript: str, description: str, timeout_s: float = 60.0) -> 
         data = conn.recv(64).decode("utf-8", errors="ignore").strip()
         conn.close()
         print(f"{description}: robot reported '{data}'")
+        if "CONTACT" in data:
+            print("The force sensor detected contact and stopped the descent.")
+        elif "FLOOR" in data:
+            print("No contact was felt - the arm stopped at the safety floor.")
         return data or "DONE"
     except socket.timeout:
         print(f"TIMEOUT waiting for the robot to finish {description}.")
@@ -367,6 +371,12 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
         f"  movel({approach}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         # 2. descend until the force sensor feels the object
         + _descent_block()
+        # Fold the descent result into status, so the print above shows it.
+        + '  if (contact == True):\n'
+        + '    status = "CYCLE_OK CONTACT"\n'
+        + '  else:\n'
+        + '    status = "CYCLE_OK FLOOR"\n'
+        + '  end\n'
         # ---- SUCTION: grab --------------------------------------------------
         # f"  set_digital_out({VACUUM_OUT}, True)\n"
         # f"  sleep({VACUUM_SETTLE_S})\n"
