@@ -6,6 +6,6 @@ HEIGHT=${2:-180}
 # python3 src/calibrate.py --config configs/config.yaml \
 #   --world-points="-44.63,-532.65;39.75,-553.65;86.89,-425.45;-12.89,-400.90"
 python3 src/calibrate.py --config configs/config.yaml \
-  --world-points="-533.04,-108.05;-387.10,-105.17;-384.60,-194.06;-523.89,-190.33"
+  --world-points="-575.90,-50.10;-404.62,-51.48;-404.03,-205.37;-574,-205.57"
 
 # ./scripts/calibrate.sh 200 150

@@ -11,7 +11,7 @@ workspace:
   # Example: start at 15% from left, 10% from top, cover 70% width, 80% height.
   # roi: [0.15, 0.10, 0.70, 0.80]
     #  roi: [0.29, 0.20, 0.18, 0.52]
-     roi: [0.29, 0.10, 0.40, 0.40]
+     roi: [0.39, 0.095, 0.29, 0.50]
 
 model:
   yolo_weights: models/best.pt

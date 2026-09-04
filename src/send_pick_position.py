@@ -380,7 +380,10 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
         + '  else:\n'
         + '    status = "CYCLE_OK FLOOR"\n'
         + '  end\n'
+        
+         + '  sleep(1.5)\n'
         # ---- SUCTION: grab --------------------------------------------------
+       
         # f"  set_digital_out({VACUUM_OUT}, True)\n"
         # f"  sleep({VACUUM_SETTLE_S})\n"
         # ---------------------------------------------------------------------
