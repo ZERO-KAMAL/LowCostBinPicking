@@ -63,8 +63,10 @@ DESCEND_TIMEOUT_S = 20.0  # confirmed on hardware: 8s was too short for a full
                           # descent from approach height to the floor
 
 # ---- Tool orientation (rotation vector, radians), measured on the pendant. -
-GRIPPER_RX = 2.866
-GRIPPER_RY = -1.214
+GRIPPER_RX = 3.05
+GRIPPER_RY = -0.924
+# GRIPPER_RX = 2.866
+# GRIPPER_RY = -1.214
 
 # Added to the PCA angle before sending as RZ. For a SUCTION cup the rotation
 # barely matters (a round cup is symmetric), so 0.0 is usually fine. Keep the
@@ -312,7 +314,7 @@ def send_pick_position(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
 
     script = (
         "def pick_move():\n"
-        f"  movej({transit_over_pick}, a={acceleration}, v={velocity})\n"
+        f"  movel({transit_over_pick}, a={acceleration}, v={velocity})\n"
         f"  movel({approach}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         + _descent_block()
         # ---- SUCTION: vacuum on, let the cup seal before lifting ------------
@@ -355,7 +357,8 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
 
     approach = _pose(x_m, y_m, approach_z_mm / 1000.0, rx, ry, rz_cmd)
     retreat = _pose(x_m, y_m, RETREAT_Z_MM / 1000.0, rx, ry, rz_cmd)
-    transit_over_pick = _pose(x_m, y_m, TRANSIT_Z_MM / 1000.0, rx, ry, rz_cmd)
+    # transit_over_pick = _pose(x_m, y_m, TRANSIT_Z_MM / 1000.0, rx, ry, rz_cmd)
+    transit_over_pick = _pose(x_m, y_m, TRANSIT_Z_MM / 1000.0, GRIPPER_RX, GRIPPER_RY, 0.0)
 
     # Waypoints directly above the drop and home stations, at transit height.
     over_drop = _pose_at(DROP_POSE, TRANSIT_Z_MM)

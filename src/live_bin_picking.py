@@ -281,6 +281,7 @@ def main() -> None:
                     p = best["pose"]
                     x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
                     rz = math.radians(p.angle_deg)
+                    # rz = 0
                     print(f"Sending pick: x={x_mm:.1f}mm y={y_mm:.1f}mm angle={p.angle_deg:.1f}deg")
                     send_pick_position(
                         x_mm=x_mm,
