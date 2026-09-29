@@ -54,8 +54,23 @@ class DepthEstimator:
             return None
         if self.method != "depth_anything_v2":
             return None
-        depth = self.model.infer_image(frame_bgr)
-        return depth.astype(np.float32)
+
+        # Do NOT use model.infer_image(): it builds the input tensor with its
+        # own device check, which resolves to CPU here while the model sits on
+        # MPS, giving "input and weight must be on the same device". Prepare
+        # the tensor ourselves and put it on the same device as the model.
+        import torch
+        import torch.nn.functional as F
+
+        image, (h, w) = self.model.image2tensor(frame_bgr)
+        image = image.to(self.device)
+
+        with torch.no_grad():
+            depth = self.model.forward(image)
+
+        depth = F.interpolate(depth[:, None], (h, w),
+                              mode="bilinear", align_corners=True)[0, 0]
+        return depth.cpu().numpy().astype(np.float32)
 
 
 def masked_depth_value(depth_map: Optional[np.ndarray], mask: np.ndarray) -> Optional[float]:

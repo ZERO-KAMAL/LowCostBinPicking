@@ -225,8 +225,8 @@ def main() -> None:
                     best = max(candidates, key=lambda c: c["score"])
                     p = best["pose"]
                     x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
-                    # rz = math.radians(p.angle_deg)
-                    rz = 0 
+                    rz = math.radians(p.angle_deg)
+                    # rz = 0 
                     print(f"[AUTO] pick {best['class']} x={x_mm:.1f}mm y={y_mm:.1f}mm "
                           f"angle={p.angle_deg:.1f}deg")
 

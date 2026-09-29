@@ -11,7 +11,7 @@ workspace:
   # Example: start at 15% from left, 10% from top, cover 70% width, 80% height.
   # roi: [0.15, 0.10, 0.70, 0.80]
     #  roi: [0.29, 0.20, 0.18, 0.52]
-  roi: [0.39, 0.095, 0.29, 0.50]
+   roi: [0.18, 0.20, 0.37, 0.65]
 
 model:
   yolo_weights: models/best.pt
@@ -19,7 +19,7 @@ model:
   image_size: 640
 
 depth:
-  enabled: false                 # set true only after Depth Anything V2 setup (README section 11)
+  enabled: true                 # set true only after Depth Anything V2 setup (README section 11)
   method: depth_anything_v2      # none | depth_anything_v2
   model_path: external/models/depth_anything_v2_vits.pth
   # model_path: external/models/depth_anything_v2_vits.pth
@@ -27,7 +27,7 @@ depth:
   every_n_frames: 15              # run depth only every Nth frame to keep live FPS usable
 
 pick_selection:
-  min_mask_area_px: 400          # ignore tiny noise masks
+  min_mask_area_px: 100          # ignore tiny noise masks
   area_weight: 0.3
   confidence_weight: 0.4
   depth_weight: 0.3
