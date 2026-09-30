@@ -12,6 +12,8 @@ Pairs with send_pick_position_force.py.
 
 Keys:
     q quit, s screenshot, p pick once, h home, d drop, a toggle auto
+    o suction on, f suction off, r RESET (stop + release + home)
+    o suction on, f suction off (manual, no movement)
 """
 
 import argparse
@@ -34,6 +36,8 @@ from send_pick_position import (
     send_stop,
     send_home,
     send_drop,
+    send_vacuum_on,
+    send_vacuum_off,
     APPROACH_Z_MM,
     GRIPPER_RX,
     GRIPPER_RY,
@@ -73,6 +77,32 @@ def flush_camera(cap, n: int = 5) -> None:
         cap.read()
 
 
+def print_controls() -> None:
+    """Print the key legend so nobody has to read the source to use this."""
+    print()
+    print("=" * 62)
+    print("  CONTROLS - click the video window first, then press a key")
+    print("=" * 62)
+    print("  p   PICK      pick the object circled in red, then stop")
+    print("  a   AUTO      pick repeatedly until the bin is empty")
+    print()
+    print("  h   HOME      move the arm to the home position")
+    print("  d   DROP      move the arm to the drop position")
+    print()
+    print("  o   SUCTION ON    vacuum on, no movement")
+    print("  f   SUCTION OFF   vacuum off with blow-off puff, no movement")
+    print()
+    print("  r   RESET     stop the arm, release the part, return home,")
+    print("                and switch auto mode off")
+    print()
+    print("  s   SHOT      save a screenshot to outputs/")
+    print("  q   QUIT      close the window and exit")
+    print("=" * 62)
+    print("  Keep a hand on the e-stop. Test with 'p' before using 'a'.")
+    print("=" * 62)
+    print()
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Live 2D bin picking with automatic cycling.")
     parser.add_argument("--config", default="configs/config.yaml")
@@ -83,9 +113,9 @@ def main() -> None:
 
     cfg = load_config(args.config)
     weights = args.weights or cfg["model"]["yolo_weights"]
-    if not Path(weights).exists() and weights != "yolov8n-seg.pt":
+    if not Path(weights).exists() and weights != "yolo11s-seg.pt":
         print(f"WARNING: weights not found: {weights}")
-        print("Use --weights runs/segment/chocolate_yolov8n/weights/best.pt after training.")
+        print("Use --weights runs/segment/<run_name>/weights/best.pt after training.")
 
     model = YOLO(weights)
     depth = DepthEstimator(
@@ -126,6 +156,8 @@ def main() -> None:
     auto_empty_frames = 0
     auto_failures = 0
     picks_done = 0
+
+    print_controls()
 
     try:
         while True:
@@ -201,6 +233,13 @@ def main() -> None:
                 cv2.putText(annotated, "AUTO ON - press a to stop", (10, 52),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
 
+            # Key legend along the bottom, so the controls are always visible.
+            legend = "p pick  a auto  h home  d drop  o/f suction  r RESET  s shot  q quit"
+            cv2.putText(annotated, legend, (10, annotated.shape[0] - 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
+            cv2.putText(annotated, legend, (10, annotated.shape[0] - 12),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
+
             if args.save:
                 if writer is None:
                     Path(args.save).parent.mkdir(parents=True, exist_ok=True)
@@ -208,7 +247,7 @@ def main() -> None:
                     writer = cv2.VideoWriter(args.save, fourcc, 20.0, (annotated.shape[1], annotated.shape[0]))
                 writer.write(annotated)
 
-            cv2.imshow("2D Bin Picking - q quit, s shot, p pick, h home, d drop, a auto", annotated)
+            cv2.imshow("2D Bin Picking - p pick, a auto, h home, d drop, o/f suction, r reset, q quit", annotated)
             key = cv2.waitKey(1) & 0xFF
 
             # ---- Auto mode: one full cycle per iteration, blocking ----------
@@ -225,8 +264,13 @@ def main() -> None:
                     best = max(candidates, key=lambda c: c["score"])
                     p = best["pose"]
                     x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
-                    rz = math.radians(p.angle_deg)
-                    # rz = 0 
+                    # A vacuum cup is symmetric about its own axis, so aligning
+                    # the wrist with the object's long axis gains nothing and
+                    # only risks a joint limit. Keep rz = 0, same as the manual
+                    # pick below. Restore the PCA angle only for a parallel
+                    # gripper, where the alignment actually matters.
+                    rz = 0
+                    # rz = math.radians(p.angle_deg)
                     print(f"[AUTO] pick {best['class']} x={x_mm:.1f}mm y={y_mm:.1f}mm "
                           f"angle={p.angle_deg:.1f}deg")
 
@@ -281,8 +325,8 @@ def main() -> None:
                     best = max(candidates, key=lambda c: c["score"])
                     p = best["pose"]
                     x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
-                    rz = math.radians(p.angle_deg)
-                    # rz = 0
+                    # rz = math.radians(p.angle_deg)
+                    rz = 0
                     print(f"Sending pick: x={x_mm:.1f}mm y={y_mm:.1f}mm angle={p.angle_deg:.1f}deg")
                     send_pick_position(
                         x_mm=x_mm,
@@ -297,6 +341,35 @@ def main() -> None:
                     print("Cannot send pick: no calibration loaded. Run calibrate.py first.")
                 else:
                     print("Cannot send pick: no object currently detected.")
+
+            if key == ord("r"):
+                # RESET - get back to a known safe state from anywhere.
+                # Order matters: stop the arm first so it is not still moving
+                # while we change anything, then drop whatever is held, then
+                # park at home. Auto mode is switched off and the counters are
+                # cleared, so the next run starts clean.
+                print("[RESET] Stopping arm, releasing part, returning home...")
+                auto_mode = False
+                auto_empty_frames = 0
+                auto_failures = 0
+                try:
+                    send_stop()
+                    send_vacuum_off()
+                    send_home()
+                    print("[RESET] Done - arm at home, suction off, auto off.")
+                except Exception as exc:
+                    print(f"[RESET] Could not complete: {exc}")
+                    print("[RESET] If the arm is still moving, use the e-stop.")
+                flush_camera(cap, 5)
+
+            if key == ord("o"):
+                # Manual suction ON. No movement - for testing the cup, or for
+                # grabbing a part the arm is already sitting on.
+                send_vacuum_on()
+
+            if key == ord("f"):
+                # Manual suction OFF, with the blow-off puff.
+                send_vacuum_off()
 
             if key == ord("h"):
                 send_home()

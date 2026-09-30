@@ -31,7 +31,7 @@ import socket
 import time
 
 # ---------------------------------------------------------------- connection
-HOST = "172.17.128.101"   # robot IP (UR10, confirmed by ping + suction test)
+HOST = "172.17.128.102"   # robot IP (UR10, confirmed by ping + suction test)
 PORT = 30002              # URScript secondary interface
 
 # Port on THIS PC that the robot reports back to. Must be open in the firewall.
@@ -41,7 +41,7 @@ PC_IP = None
 
 # ---- Heights (mm, robot BASE frame). Measured by jogging the robot. --------
 APPROACH_Z_MM = 115       # safe hover height above the bin
-PICK_Z_FLOOR_MM = 25      # RE-MEASURE ON THE UR10: this was the old cell's
+PICK_Z_FLOOR_MM = -12      # RE-MEASURE ON THE UR10: this was the old cell's
                           # floor (~32mm + margin) and will not match.
 RETREAT_Z_MM = 115        # height to lift back to right after grabbing
 
@@ -49,7 +49,7 @@ RETREAT_Z_MM = 115        # height to lift back to right after grabbing
 # the camera mount, and anything else standing in the workspace. movej swings
 # the TCP through an arc, so travelling at the same height as the endpoints is
 # NOT safe - the middle of the arc dips lower. Go up first, travel, come down.
-TRANSIT_Z_MM = 130
+TRANSIT_Z_MM = 120
 
 # ---- Force settings -------------------------------------------------------
 # PUSH_FORCE_N MUST be higher than CONTACT_FORCE_N. If the push force is too
@@ -57,15 +57,19 @@ TRANSIT_Z_MM = 130
 # resistance to cross the contact threshold - it just sits there until the
 # timeout, which looks identical to "no contact" even when it IS touching
 # something. Confirmed on hardware: 10/12 never triggered, 15/8 did.
-PUSH_FORCE_N = 15.0       # downward force applied while searching
-CONTACT_FORCE_N = 8.0     # force that counts as "touched the object"
-DESCEND_SPEED = 0.04      # m/s, max speed of the compliant descent. Keep slow.
+PUSH_FORCE_N = 70.0       # downward force applied while searching
+CONTACT_FORCE_N = 60.0     # force that counts as "touched the object"
+DESCEND_SPEED = 0.01      # m/s, max speed of the compliant descent. Keep slow.
 DESCEND_TIMEOUT_S = 20.0  # confirmed on hardware: 8s was too short for a full
                           # descent from approach height to the floor
+                          
+# PUSH_FORCE_N = 8.0      # was 15.0 - gentler acceleration into the descent
+# CONTACT_FORCE_N = 5.0   # must stay below PUSH_FORCE_N
+# DESCEND_SPEED = 0.02 
 
 # ---- Tool orientation (rotation vector, radians), measured on the pendant. -
-GRIPPER_RX = 2.234
-GRIPPER_RY = -2.238
+GRIPPER_RX = 2.248
+GRIPPER_RY = -2.154
 
 # Added to the PCA angle before sending as RZ. For a SUCTION cup the rotation
 # barely matters (a round cup is symmetric), so 0.0 is usually fine. Keep the
@@ -74,10 +78,9 @@ RZ_OFFSET = 0.0
 
 # ---- Fixed poses (metres + radians, BASE frame), measured by jogging. ------
 # ---- Station poses. RE-TEACH THESE ON THE UR10 -----------------------------
-# The values below were taught on the old UR5 cell and will be WRONG here.
-# Jog the UR10 to each station, read the TCP pose off the pendant, paste it in.
+# The values below were taught on the old UR5 cell and will be WRONG here. # Jog the UR10 to each station, read the TCP pose off the pendant, paste it in.
 DROP_POSE = [0.39318, -0.37440, 0.009, 2.234, -2.238, 0.028]
-HOME_POSE = [0.37135, 0.00285, 0.130, 2.235, -2.238, 0.027]
+HOME_POSE = [0.37135, 0.00285, 0.120, 2.235, -2.238, 0.027]
 
 # ---- SUCTION wiring -------------------------------------------------------
 VACUUM_OUT = 0            # digital output driving the vacuum solenoid valve
@@ -251,6 +254,31 @@ def send_stop() -> None:
     except Exception as e:
         print(f"Could not send stop: {e}")
         print("If the arm is still moving, use the physical emergency stop.")
+
+
+def send_vacuum_on() -> None:
+    """Switch the suction ON by hand. No movement at all.
+
+    For testing the cup, and for grabbing a part the arm is already sitting on.
+    """
+    script = (
+        "def vac_on():\n"
+        + _grab_block()
+        + "end\n"
+    )
+    if _send(script, "vacuum on"):
+        print(f"DO{VACUUM_OUT} ON - suction running")
+
+
+def send_vacuum_off() -> None:
+    """Switch the suction OFF by hand, with the blow-off puff. No movement."""
+    script = (
+        "def vac_off():\n"
+        + _release_block()
+        + "end\n"
+    )
+    if _send(script, "vacuum off"):
+        print(f"DO{VACUUM_OUT} OFF - released")
 
 
 def send_home() -> None:

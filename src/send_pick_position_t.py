@@ -1,5 +1,5 @@
 """
-Force-guided pick motion for a UR5 with a pneumatic SUCTION gripper.
+Force-guided pick motion for a UR10 with a pneumatic SUCTION gripper.
 
 WHAT IS NEW COMPARED TO send_pick_position.py
   1. FORCE-GUIDED DESCENT. Instead of driving to a fixed PICK_Z_MM, the arm
@@ -31,7 +31,7 @@ import socket
 import time
 
 # ---------------------------------------------------------------- connection
-HOST = "192.168.1.10"     # robot IP
+HOST = "172.17.128.102"   # robot IP (UR10, confirmed by ping + suction test)
 PORT = 30002              # URScript secondary interface
 
 # Port on THIS PC that the robot reports back to. Must be open in the firewall.
@@ -40,15 +40,16 @@ FEEDBACK_PORT = 30010
 PC_IP = None
 
 # ---- Heights (mm, robot BASE frame). Measured by jogging the robot. --------
-APPROACH_Z_MM = 150       # safe hover height above the bin
-PICK_Z_FLOOR_MM = 35      # measured on hardware: real floor was ~32mm, +margin
-RETREAT_Z_MM = 150        # height to lift back to right after grabbing
+APPROACH_Z_MM = 115       # safe hover height above the bin
+PICK_Z_FLOOR_MM = -12      # RE-MEASURE ON THE UR10: this was the old cell's
+                          # floor (~32mm + margin) and will not match.
+RETREAT_Z_MM = 115        # height to lift back to right after grabbing
 
 # Height for ALL horizontal travel between stations. Must clear the bin walls,
 # the camera mount, and anything else standing in the workspace. movej swings
 # the TCP through an arc, so travelling at the same height as the endpoints is
 # NOT safe - the middle of the arc dips lower. Go up first, travel, come down.
-TRANSIT_Z_MM = 280
+TRANSIT_Z_MM = 120
 
 # ---- Force settings -------------------------------------------------------
 # PUSH_FORCE_N MUST be higher than CONTACT_FORCE_N. If the push force is too
@@ -56,17 +57,19 @@ TRANSIT_Z_MM = 280
 # resistance to cross the contact threshold - it just sits there until the
 # timeout, which looks identical to "no contact" even when it IS touching
 # something. Confirmed on hardware: 10/12 never triggered, 15/8 did.
-PUSH_FORCE_N = 15.0       # downward force applied while searching
-CONTACT_FORCE_N = 8.0     # force that counts as "touched the object"
-DESCEND_SPEED = 0.04      # m/s, max speed of the compliant descent. Keep slow.
+PUSH_FORCE_N = 70.0       # downward force applied while searching
+CONTACT_FORCE_N = 60.0     # force that counts as "touched the object"
+DESCEND_SPEED = 0.01      # m/s, max speed of the compliant descent. Keep slow.
 DESCEND_TIMEOUT_S = 20.0  # confirmed on hardware: 8s was too short for a full
                           # descent from approach height to the floor
+                          
+# PUSH_FORCE_N = 8.0      # was 15.0 - gentler acceleration into the descent
+# CONTACT_FORCE_N = 5.0   # must stay below PUSH_FORCE_N
+# DESCEND_SPEED = 0.02 
 
 # ---- Tool orientation (rotation vector, radians), measured on the pendant. -
-GRIPPER_RX = 3.05
-GRIPPER_RY = -0.924
-# GRIPPER_RX = 2.866
-# GRIPPER_RY = -1.214
+GRIPPER_RX = 2.248
+GRIPPER_RY = -2.154
 
 # Added to the PCA angle before sending as RZ. For a SUCTION cup the rotation
 # barely matters (a round cup is symmetric), so 0.0 is usually fine. Keep the
@@ -74,15 +77,25 @@ GRIPPER_RY = -0.924
 RZ_OFFSET = 0.0
 
 # ---- Fixed poses (metres + radians, BASE frame), measured by jogging. ------
-DROP_POSE = [-0.206, -0.306, 0.150, 2.866, -1.214, 0.069]
-HOME_POSE = [-0.205, -0.1362, 0.280, 2.866, -1.214, 0.069]
+# ---- Station poses. RE-TEACH THESE ON THE UR10 -----------------------------
+# The values below were taught on the old UR5 cell and will be WRONG here. # Jog the UR10 to each station, read the TCP pose off the pendant, paste it in.
+DROP_POSE = [0.39318, -0.37440, 0.009, 2.234, -2.238, 0.028]
+HOME_POSE = [0.37135, 0.00285, 0.120, 2.235, -2.238, 0.027]
 
-# ---- SUCTION wiring (COMMENTED OUT FOR NOW) -------------------------------
-# VACUUM_OUT = 0          # digital output driving the vacuum solenoid valve
-# BLOWOFF_OUT = 1         # optional: output for the blow-off / release puff
-# VACUUM_IN = 0           # digital input from the vacuum pressure switch
-# VACUUM_SETTLE_S = 0.6   # time to let the cup build vacuum before lifting
-# BLOWOFF_S = 0.3         # how long to puff air to release the part
+# ---- SUCTION wiring -------------------------------------------------------
+VACUUM_OUT = 0            # digital output driving the vacuum solenoid valve
+VACUUM_SETTLE_S = 1.0     # supervisor: allow one second for vacuum to build
+                          # before lifting, otherwise the part is dropped.
+
+# The temporary gripper has no pressure switch and no blow-off valve. Set
+# HAS_VACUUM_SENSOR True only once a gripper with feedback is fitted; until
+# then the cycle cannot tell a successful grab from an empty one, and
+# NO_VACUUM is never reported.
+HAS_VACUUM_SENSOR = False
+VACUUM_IN = 0             # digital input from the vacuum pressure switch
+HAS_BLOWOFF = True        # confirmed: DO1 is the release puff on this gripper
+BLOWOFF_OUT = 1           # output for the blow-off / release puff
+BLOWOFF_S = 0.3           # how long to puff air to release the part
 
 # ---- Motion speeds. Keep LOW while testing. -------------------------------
 JOINT_ACC = 0.5
@@ -94,6 +107,22 @@ STOP_DECEL = 2.0          # rad/s^2 for send_stop()
 
 
 # ------------------------------------------------------------------ helpers
+def _rot_about_tool_z(pose_str: str, rz_rad: float, var: str) -> str:
+    """Emit URScript that rotates `pose_str` about the TOOL's own Z axis.
+
+    In p[x,y,z,rx,ry,rz] the last three numbers are NOT roll/pitch/yaw. They
+    are one rotation VECTOR: its direction is the axis, its length the angle.
+    Writing the PCA angle into rz therefore does not spin the wrist, it swings
+    the tool to an unrelated orientation - which is what produced the wild
+    rotations.
+
+    pose_trans composes them properly. The second pose is applied in the frame
+    of the first, so a pure Z rotation there means "turn the wrist by this
+    much, keeping the tool pointing where it already points".
+    """
+    return f"  {var} = pose_trans({pose_str}, p[0,0,0,0,0,{rz_rad:.5f}])\n"
+
+
 def _pose(x, y, z, rx, ry, rz) -> str:
     return f"p[{x:.4f}, {y:.4f}, {z:.4f}, {rx:.4f}, {ry:.4f}, {rz:.4f}]"
 
@@ -106,6 +135,47 @@ def _pose_at(pose_list, z_mm: float) -> str:
     """
     x, y, _z, rx, ry, rz = pose_list
     return _pose(x, y, z_mm / 1000.0, rx, ry, rz)
+
+
+def _grab_block(indent: str = "  ") -> str:
+    """Switch the vacuum on and wait for the cup to seal before lifting."""
+    i = indent
+    return (
+        f"{i}set_digital_out({VACUUM_OUT}, True)\n"
+        f"{i}sleep({VACUUM_SETTLE_S})\n"
+    )
+
+
+def _release_block(indent: str = "  ") -> str:
+    """Switch the vacuum off, with an optional blow-off puff if one is fitted."""
+    i = indent
+    block = f"{i}set_digital_out({VACUUM_OUT}, False)\n"
+    if HAS_BLOWOFF:
+        block += (
+            f"{i}set_digital_out({BLOWOFF_OUT}, True)\n"
+            f"{i}sleep({BLOWOFF_S})\n"
+            f"{i}set_digital_out({BLOWOFF_OUT}, False)\n"
+        )
+    else:
+        block += f"{i}sleep(0.3)\n"
+    return block
+
+
+def _vacuum_check_block(indent: str = "  ") -> str:
+    """Ask the pressure switch whether anything was actually grabbed.
+
+    Returns an empty string when no sensor is fitted, in which case the cycle
+    always reports success and a failed grab looks identical to a good one.
+    """
+    if not HAS_VACUUM_SENSOR:
+        return ""
+    i = indent
+    return (
+        f"{i}if (get_digital_in({VACUUM_IN}) == False):\n"
+        f'{i}  status = "NO_VACUUM"\n'
+        f"{i}  set_digital_out({VACUUM_OUT}, False)\n"
+        f"{i}end\n"
+    )
 
 
 def _local_ip() -> str:
@@ -202,6 +272,31 @@ def send_stop() -> None:
         print("If the arm is still moving, use the physical emergency stop.")
 
 
+def send_vacuum_on() -> None:
+    """Switch the suction ON by hand. No movement at all.
+
+    For testing the cup, and for grabbing a part the arm is already sitting on.
+    """
+    script = (
+        "def vac_on():\n"
+        + _grab_block()
+        + "end\n"
+    )
+    if _send(script, "vacuum on"):
+        print(f"DO{VACUUM_OUT} ON - suction running")
+
+
+def send_vacuum_off() -> None:
+    """Switch the suction OFF by hand, with the blow-off puff. No movement."""
+    script = (
+        "def vac_off():\n"
+        + _release_block()
+        + "end\n"
+    )
+    if _send(script, "vacuum off"):
+        print(f"DO{VACUUM_OUT} OFF - released")
+
+
 def send_home() -> None:
     """Move the arm to HOME_POSE - parked clear of the camera view."""
     script = (
@@ -234,12 +329,8 @@ def send_drop() -> None:
         f"  movej({_pose_at(DROP_POSE, TRANSIT_Z_MM)}, a={JOINT_ACC}, v={JOINT_VEL})\n"
         f"  movel({_pose(*DROP_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         # ---- SUCTION: release the part -------------------------------------
-        # f"  set_digital_out({VACUUM_OUT}, False)\n"
-        # f"  set_digital_out({BLOWOFF_OUT}, True)\n"
-        # f"  sleep({BLOWOFF_S})\n"
-        # f"  set_digital_out({BLOWOFF_OUT}, False)\n"
-        # --------------------------------------------------------------------
-        f'  socket_open("{_local_ip()}", {FEEDBACK_PORT}, "pc")\n'
+        + _release_block()
+        + f'  socket_open("{_local_ip()}", {FEEDBACK_PORT}, "pc")\n'
         '  socket_send_line("DROP_OK", "pc")\n'
         '  socket_close("pc")\n'
         "end\n"
@@ -262,7 +353,9 @@ def _descent_block(indent: str = "  ") -> str:
     If you are on an e-Series controller, the equivalent is roughly:
         step = tool_contact(direction=get_target_tcp_speed())
         if step > 0: stopl(3.0) ...
-    Keep this version for CB3, which is what a classic UR5 runs.
+    Keep this version for CB3, which is what this UR10 runs. Note that force()
+    is the ROBOT'S OWN built-in force estimate from joint currents - no
+    external FT sensor is used or needed.
     """
     i = indent
     z_floor = PICK_Z_FLOOR_MM / 1000.0
@@ -308,20 +401,23 @@ def send_pick_position(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
     y_m = y_mm / 1000.0
     rz_cmd = rz + RZ_OFFSET
 
-    approach = _pose(x_m, y_m, approach_z_mm / 1000.0, rx, ry, rz_cmd)
-    retreat = _pose(x_m, y_m, RETREAT_Z_MM / 1000.0, rx, ry, rz_cmd)
-    transit_over_pick = _pose(x_m, y_m, TRANSIT_Z_MM / 1000.0, rx, ry, rz_cmd)
+    # Build every pose with the wrist UNROTATED, then let the controller turn
+    # it about the tool Z axis by rz_cmd. See _rot_about_tool_z above.
+    approach_0 = _pose(x_m, y_m, approach_z_mm / 1000.0, rx, ry, 0.0)
+    retreat_0 = _pose(x_m, y_m, RETREAT_Z_MM / 1000.0, rx, ry, 0.0)
+    transit_0 = _pose(x_m, y_m, TRANSIT_Z_MM / 1000.0, rx, ry, 0.0)
 
     script = (
         "def pick_move():\n"
-        f"  movel({transit_over_pick}, a={acceleration}, v={velocity})\n"
-        f"  movel({approach}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        + _rot_about_tool_z(transit_0, rz_cmd, "p_transit")
+        + _rot_about_tool_z(approach_0, rz_cmd, "p_approach")
+        + _rot_about_tool_z(retreat_0, rz_cmd, "p_retreat")
+        + f"  movel(p_transit, a={acceleration}, v={velocity})\n"
+        + f"  movel(p_approach, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         + _descent_block()
         # ---- SUCTION: vacuum on, let the cup seal before lifting ------------
-        # f"  set_digital_out({VACUUM_OUT}, True)\n"
-        # f"  sleep({VACUUM_SETTLE_S})\n"
-        # ---------------------------------------------------------------------
-        + f"  movel({retreat}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        + _grab_block()
+        + f"  movel(p_retreat, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         + f'  socket_open("{_local_ip()}", {FEEDBACK_PORT}, "pc")\n'
         + '  socket_send_line("PICK_OK", "pc")\n'
         + '  socket_close("pc")\n'
@@ -355,9 +451,10 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
     y_m = y_mm / 1000.0
     rz_cmd = rz + RZ_OFFSET
 
-    approach = _pose(x_m, y_m, approach_z_mm / 1000.0, rx, ry, rz_cmd)
-    retreat = _pose(x_m, y_m, RETREAT_Z_MM / 1000.0, rx, ry, rz_cmd)
-    # transit_over_pick = _pose(x_m, y_m, TRANSIT_Z_MM / 1000.0, rx, ry, rz_cmd)
+    approach_0 = _pose(x_m, y_m, approach_z_mm / 1000.0, rx, ry, 0.0)
+    retreat_0 = _pose(x_m, y_m, RETREAT_Z_MM / 1000.0, rx, ry, 0.0)
+    # Travel across with the wrist unrotated, so the turn happens while
+    # hovering above the part rather than on the way there.
     transit_over_pick = _pose(x_m, y_m, TRANSIT_Z_MM / 1000.0, GRIPPER_RX, GRIPPER_RY, 0.0)
 
     # Waypoints directly above the drop and home stations, at transit height.
@@ -371,7 +468,9 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
         #    come down to the hover height above the target. Approaching
         #    sideways at hover height would sweep through anything in the way.
         f"  movej({transit_over_pick}, a={JOINT_ACC}, v={JOINT_VEL})\n"
-        f"  movel({approach}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        + _rot_about_tool_z(approach_0, rz_cmd, "p_approach")
+        + _rot_about_tool_z(retreat_0, rz_cmd, "p_retreat")
+        + f"  movel(p_approach, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         # 2. descend until the force sensor feels the object
         + _descent_block()
         # Fold the descent result into status, so the print above shows it.
@@ -380,37 +479,25 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
         + '  else:\n'
         + '    status = "CYCLE_OK FLOOR"\n'
         + '  end\n'
-        
-         + '  sleep(1.5)\n'
-        # ---- SUCTION: grab --------------------------------------------------
-       
-        # f"  set_digital_out({VACUUM_OUT}, True)\n"
-        # f"  sleep({VACUUM_SETTLE_S})\n"
-        # ---------------------------------------------------------------------
+        # ---- SUCTION: grab. Vacuum on, then wait for the cup to seal. -------
+        + _grab_block()
         # 3. lift STRAIGHT up (movel, not movej) so the part is not dragged
         #    sideways through its neighbours, then continue up to transit.
-        + f"  movel({retreat}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        + f"  movel(p_retreat, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         + f"  movel({transit_over_pick}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         # ---- SUCTION: did we actually grab anything? -------------------------
-        # The vacuum pressure switch is the only honest answer here. Without
-        # it the loop will happily "pick" empty air forever.
-        # f"  if (get_digital_in({VACUUM_IN}) == False):\n"
-        # f'    status = "NO_VACUUM"\n'
-        # f"    set_digital_out({VACUUM_OUT}, False)\n"
-        # f"  end\n"
-        # ---------------------------------------------------------------------
+        # The vacuum pressure switch is the only honest answer here. With no
+        # switch fitted this block is empty and the loop will happily "pick"
+        # empty air forever.
+        + _vacuum_check_block()
         # 4. travel HIGH to a point above the drop, then descend vertically.
         #    This is the step that used to be a single movej straight to
         #    DROP_POSE. movej interpolates joints, so the TCP swings through an
         #    arc that can dip into the bin on the way - hence the waypoint.
         + f"  movej({over_drop}, a={JOINT_ACC}, v={JOINT_VEL})\n"
         + f"  movel({_pose(*DROP_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
-        # ---- SUCTION: release ------------------------------------------------
-        # f"  set_digital_out({VACUUM_OUT}, False)\n"
-        # f"  set_digital_out({BLOWOFF_OUT}, True)\n"
-        # f"  sleep({BLOWOFF_S})\n"
-        # f"  set_digital_out({BLOWOFF_OUT}, False)\n"
-        # ---------------------------------------------------------------------
+        # ---- SUCTION: release the part at the drop station -------------------
+        + _release_block()
         # 5. climb back out of the drop station before travelling anywhere.
         + f"  movel({over_drop}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         # 6. park at home, clear of the camera, ready for the next detection.
