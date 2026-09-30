@@ -91,7 +91,8 @@ VACUUM_SETTLE_S = 1.0     # supervisor: allow one second for vacuum to build
 # HAS_VACUUM_SENSOR True only once a gripper with feedback is fitted; until
 # then the cycle cannot tell a successful grab from an empty one, and
 # NO_VACUUM is never reported.
-HAS_VACUUM_SENSOR = False
+# HAS_VACUUM_SENSOR = False
+HAS_VACUUM_SENSOR = True
 VACUUM_IN = 0             # digital input from the vacuum pressure switch
 HAS_BLOWOFF = True        # confirmed: DO1 is the release puff on this gripper
 BLOWOFF_OUT = 1           # output for the blow-off / release puff
@@ -302,7 +303,22 @@ def send_home() -> None:
     print("Moving to home position.")
     _send_and_wait(script, "Home command", timeout_s=30.0)
 
+def send_popup(message: str, title: str = "Bin picking") -> None:
+    """Show a message box on the teach pendant. No movement.
 
+    The bin-empty decision is made on the PC, so without this the operator at
+    the robot has no idea why the arm stopped.
+    """
+    # Quotes would break the URScript string literal.
+    safe = message.replace('"', "'")
+    script = (
+        "def show_msg():\n"
+        f'  popup("{safe}", "{title}", False, False, False)\n'
+        "  halt\n"
+        "end\n"
+    )
+    _send(script, "pendant message")
+    
 def send_drop() -> None:
     """Move the arm to DROP_POSE and release."""
     script = (
@@ -465,17 +481,22 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
         # The vacuum pressure switch is the only honest answer here. With no
         # switch fitted this block is empty and the loop will happily "pick"
         # empty air forever.
-        + _vacuum_check_block()
-        # 4. travel HIGH to a point above the drop, then descend vertically.
-        #    This is the step that used to be a single movej straight to
-        #    DROP_POSE. movej interpolates joints, so the TCP swings through an
-        #    arc that can dip into the bin on the way - hence the waypoint.
-        + f"  movej({over_drop}, a={JOINT_ACC}, v={JOINT_VEL})\n"
-        + f"  movel({_pose(*DROP_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+         + _vacuum_check_block()
+        # 4. Only visit the drop station if something is actually held. DI0
+        #    goes high when the cup has grabbed a part; if it did not, there is
+        #    nothing to release, so skip the drop entirely and park at home.
+        #    The next detection then tries again.
+        + '  if (status != "NO_VACUUM"):\n'
+        #    Travel HIGH to a point above the drop, then descend vertically.
+        #    A single movej straight to DROP_POSE interpolates joints, so the
+        #    TCP swings through an arc that can dip into the bin on the way.
+        + f"    movej({over_drop}, a={JOINT_ACC}, v={JOINT_VEL})\n"
+        + f"    movel({_pose(*DROP_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         # ---- SUCTION: release the part at the drop station -------------------
-        + _release_block()
-        # 5. climb back out of the drop station before travelling anywhere.
-        + f"  movel({over_drop}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        + _release_block("    ")
+        #    Climb back out of the drop station before travelling anywhere.
+        + f"    movel({over_drop}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        + "  end\n"
         # 6. park at home, clear of the camera, ready for the next detection.
         + f"  movej({over_home}, a={JOINT_ACC}, v={JOINT_VEL})\n"
         + f"  movel({_pose(*HOME_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"

@@ -38,6 +38,7 @@ from send_pick_position import (
     send_drop,
     send_vacuum_on,
     send_vacuum_off,
+    send_popup,
     APPROACH_Z_MM,
     GRIPPER_RX,
     GRIPPER_RY,
@@ -294,6 +295,7 @@ def main() -> None:
                         print(f"[AUTO] Grab failed ({auto_failures}/{AUTO_MAX_FAILURES}).")
                         if auto_failures >= AUTO_MAX_FAILURES:
                             print("[AUTO] Too many failed grabs - stopping.")
+                            send_popup(f"Stopped: {AUTO_MAX_FAILURES} failed grabs")
                             auto_mode = False
                     else:
                         auto_failures = 0
@@ -307,6 +309,7 @@ def main() -> None:
                     if auto_empty_frames >= AUTO_EMPTY_FRAMES_NEEDED:
                         print(f"[AUTO] Bin appears empty after {picks_done} picks. Stopping.")
                         send_home()
+                        send_popup(f"Bin empty - {picks_done} parts picked")
                         auto_mode = False
                         auto_empty_frames = 0
 
