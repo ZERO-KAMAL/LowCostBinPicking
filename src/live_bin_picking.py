@@ -2,18 +2,14 @@ from __future__ import annotations
 
 """Live 2D bin picking with a fully automatic cycle.
 
-Difference from live_bin_picking2.py: the auto loop no longer guesses how long
-the robot needs with time.sleep(). It sends one complete cycle (pick -> drop ->
-home) to the controller and blocks until the robot reports back. That makes the
-loop self-synchronising - the next detection only happens once the arm is
-actually parked at home and out of the camera view.
-
-Pairs with send_pick_position_force.py.
+Each auto iteration sends one complete cycle (pick -> drop -> home) to the
+controller and blocks until the robot reports back, so the loop is self
+synchronising: the next detection only happens once the arm is parked at home
+and out of the camera view.
 
 Keys:
-    q quit, s screenshot, p pick once, h home, d drop, a toggle auto
-    o suction on, f suction off, r RESET (stop + release + home)
-    o suction on, f suction off (manual, no movement)
+    p pick once, a toggle auto, h home, d drop, o suction on, f suction off,
+    r reset, s screenshot, q quit
 """
 
 import argparse
@@ -44,12 +40,10 @@ from send_pick_position import (
     GRIPPER_RY,
 )
 
-# Consecutive empty frames before we call the bin empty. One bad frame should
-# not end a run, but 15 in a row means there is genuinely nothing left.
+# One bad frame should not end a run, but 15 empty in a row means the bin is.
 AUTO_EMPTY_FRAMES_NEEDED = 15
 
-# Failed grabs in a row before auto mode gives up. Without this, a part the cup
-# cannot lift would be retried forever.
+# Without this, a part the cup cannot lift would be retried forever.
 AUTO_MAX_FAILURES = 3
 
 # 9mm drop + 6 x 15mm = 99mm, still clear of TRANSIT_Z_MM at 120.
@@ -61,8 +55,8 @@ def score_object(confidence: float, area_px: int, depth_value: Optional[float], 
     weights = cfg["pick_selection"]
     area_score = min(area_px / 20000.0, 1.0)
     conf_score = confidence
-    # Depth Anything V2 outputs relative inverse depth (larger = closer).
-    # After normalize_depth, depth_value near 1.0 usually means "on top".
+    # Depth Anything V2 gives relative inverse depth, so after normalising,
+    # a value near 1.0 means the object is nearest the camera.
     depth_score = 0.5 if depth_value is None else float(np.clip(depth_value, 0, 1))
     return (
         weights["area_weight"] * area_score
@@ -72,18 +66,14 @@ def score_object(confidence: float, area_px: int, depth_value: Optional[float], 
 
 
 def flush_camera(cap, n: int = 5) -> None:
-    """Throw away buffered frames.
-
-    While the robot was moving, the driver kept queuing frames showing the arm
-    in the way. Without this, the next detection runs on a stale picture and
-    the system tries to pick the gripper.
-    """
+    """Throw away frames the driver queued while the arm was in the way.
+    Without this the next detection runs on a stale picture showing the
+    gripper, and the system tries to pick it."""
     for _ in range(n):
         cap.read()
 
 
 def print_controls() -> None:
-    """Print the key legend so nobody has to read the source to use this."""
     print()
     print("=" * 62)
     print("  CONTROLS - click the video window first, then press a key")
@@ -131,7 +121,6 @@ def main() -> None:
     )
     depth_every_n = int(cfg["depth"].get("every_n_frames", 5))
 
-    # Load pixel->mm calibration if it exists (created by calibrate.py).
     calib_path = cfg.get("calibration", {}).get("path", "configs/calibration.npz")
     H = load_calibration(calib_path)
     if H is not None:
@@ -175,7 +164,7 @@ def main() -> None:
 
             roi_frame, roi_box = apply_roi(frame, cfg["workspace"]["roi"])
 
-            # Depth is expensive: run only every Nth frame and reuse the last map.
+            # Depth is expensive: run every Nth frame and reuse the last map.
             if depth.enabled and frame_idx % depth_every_n == 0:
                 raw_depth = depth.predict(roi_frame)
                 depth_map = normalize_depth(raw_depth) if raw_depth is not None else None
@@ -238,7 +227,6 @@ def main() -> None:
                 cv2.putText(annotated, "AUTO ON - press a to stop", (10, 52),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
 
-            # Key legend along the bottom, so the controls are always visible.
             legend = "p pick  a auto  h home  d drop  o/f suction  r RESET  s shot  q quit"
             cv2.putText(annotated, legend, (10, annotated.shape[0] - 12),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3)
@@ -255,11 +243,9 @@ def main() -> None:
             cv2.imshow("2D Bin Picking - p pick, a auto, h home, d drop, o/f suction, r reset, q quit", annotated)
             key = cv2.waitKey(1) & 0xFF
 
-            # ---- Auto mode: one full cycle per iteration, blocking ----------
             # The window is drawn BEFORE this block, so the operator sees the
-            # scene the robot is about to act on. The cycle itself blocks until
-            # the controller reports back - no timing guesses, no commands
-            # stacking up on top of each other.
+            # scene the robot is about to act on. The cycle then blocks until
+            # the controller reports back, so commands cannot stack up.
             if auto_mode:
                 if H is None:
                     print("Auto mode off: no calibration loaded.")
@@ -276,11 +262,10 @@ def main() -> None:
                     best = max(candidates, key=lambda c: c["score"])
                     p = best["pose"]
                     x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
-                    # A vacuum cup is symmetric about its own axis, so aligning
-                    # the wrist with the object's long axis gains nothing and
-                    # only risks a joint limit. Keep rz = 0, same as the manual
-                    # pick below. Restore the PCA angle only for a parallel
-                    # gripper, where the alignment actually matters.
+                    # A single vacuum cup is symmetric, so aligning the wrist
+                    # with the object's long axis gains nothing and only risks
+                    # a joint limit. The PCA angle matters for a parallel
+                    # gripper or a multi-cup bar.
                     rz = 0
                     # rz = math.radians(p.angle_deg)
                     print(f"[AUTO] pick {best['class']} x={x_mm:.1f}mm y={y_mm:.1f}mm "
@@ -297,12 +282,11 @@ def main() -> None:
                     )
 
                     if status is None:
-                        # No report came back. We do not know where the arm is,
-                        # so stop rather than send another move on top of it.
+                        # We do not know where the arm is, so stop rather than
+                        # send another move on top of it.
                         print("[AUTO] No reply from the robot - stopping auto mode.")
                         auto_mode = False
                     elif status == "NO_VACUUM":
-                        # Only reachable once the suction lines are enabled.
                         auto_failures += 1
                         print(f"[AUTO] Grab failed ({auto_failures}/{AUTO_MAX_FAILURES}).")
                         if auto_failures >= AUTO_MAX_FAILURES:
@@ -314,7 +298,6 @@ def main() -> None:
                         picks_done += 1
                         print(f"[AUTO] Cycle complete. Total picked: {picks_done}")
 
-                    # Drop the frames buffered while the arm was in the way.
                     flush_camera(cap, 5)
                 else:
                     auto_empty_frames += 1
@@ -335,7 +318,6 @@ def main() -> None:
                 print(f"Saved {shot}")
 
             if key == ord("p"):
-                # Manual single pick - use this to test the force descent.
                 if candidates and H is not None:
                     best = max(candidates, key=lambda c: c["score"])
                     p = best["pose"]
@@ -358,11 +340,9 @@ def main() -> None:
                     print("Cannot send pick: no object currently detected.")
 
             if key == ord("r"):
-                # RESET - get back to a known safe state from anywhere.
-                # Order matters: stop the arm first so it is not still moving
-                # while we change anything, then drop whatever is held, then
-                # park at home. Auto mode is switched off and the counters are
-                # cleared, so the next run starts clean.
+                # Order matters: halt the arm before changing anything, then
+                # release whatever is held, then park. Counters are cleared so
+                # the next run starts from an empty drop station.
                 print("[RESET] Stopping arm, releasing part, returning home...")
                 auto_mode = False
                 auto_empty_frames = 0
@@ -379,12 +359,9 @@ def main() -> None:
                 flush_camera(cap, 5)
 
             if key == ord("o"):
-                # Manual suction ON. No movement - for testing the cup, or for
-                # grabbing a part the arm is already sitting on.
                 send_vacuum_on()
 
             if key == ord("f"):
-                # Manual suction OFF, with the blow-off puff.
                 send_vacuum_off()
 
             if key == ord("h"):
@@ -402,7 +379,8 @@ def main() -> None:
                 if auto_mode:
                     print("[AUTO] ON - cycling until the bin is empty. "
                           "Press 'a' again or 'q' to stop. Hand on the e-stop.")
-                    # Start from a known pose so the first detection is clean.
+                    # Start from a known pose so the first detection is clean,
+                    # and assume the drop station was emptied.
                     picks_done = 0
                     send_home()
                     flush_camera(cap, 5)
