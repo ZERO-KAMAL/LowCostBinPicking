@@ -99,10 +99,10 @@ BLOWOFF_OUT = 1           # output for the blow-off / release puff
 BLOWOFF_S = 0.3           # how long to puff air to release the part
 
 # ---- Motion speeds. Keep LOW while testing. -------------------------------
-JOINT_ACC = 0.5
-JOINT_VEL = 0.2
-LINEAR_ACC = 0.4
-LINEAR_VEL = 0.15
+JOINT_ACC = 1.0
+JOINT_VEL = 0.5
+LINEAR_ACC = 0.8
+LINEAR_VEL = 0.3
 
 STOP_DECEL = 2.0          # rad/s^2 for send_stop()
 
@@ -427,7 +427,7 @@ def send_pick_position(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
 
 
 def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
-                    approach_z_mm=APPROACH_Z_MM, timeout_s=90.0) -> str | None:
+                    approach_z_mm=APPROACH_Z_MM, timeout_s=90.0,drop_z_offset_mm=0.0) -> str | None:
     """
     ONE COMPLETE CYCLE, sent as a single URScript program:
 
@@ -453,6 +453,10 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
 
     # Waypoints directly above the drop and home stations, at transit height.
     over_drop = _pose_at(DROP_POSE, TRANSIT_Z_MM)
+    # Each part lands on the last, so raise the release height. Clamped below
+    # transit so a wrong count can never command a drop above travel height.
+    drop_z_mm = min(DROP_POSE[2] * 1000.0 + drop_z_offset_mm, TRANSIT_Z_MM - 10)
+    drop_pose_str = _pose_at(DROP_POSE, drop_z_mm)
     over_home = _pose_at(HOME_POSE, TRANSIT_Z_MM)
 
     script = (
@@ -491,7 +495,8 @@ def send_pick_cycle(x_mm, y_mm, rx=GRIPPER_RX, ry=GRIPPER_RY, rz=0.0,
         #    A single movej straight to DROP_POSE interpolates joints, so the
         #    TCP swings through an arc that can dip into the bin on the way.
         + f"    movej({over_drop}, a={JOINT_ACC}, v={JOINT_VEL})\n"
-        + f"    movel({_pose(*DROP_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        # + f"    movel({_pose(*DROP_POSE)}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
+        + f"    movel({drop_pose_str}, a={LINEAR_ACC}, v={LINEAR_VEL})\n"
         # ---- SUCTION: release the part at the drop station -------------------
         + _release_block("    ")
         #    Climb back out of the drop station before travelling anywhere.

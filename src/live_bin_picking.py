@@ -52,6 +52,10 @@ AUTO_EMPTY_FRAMES_NEEDED = 15
 # cannot lift would be retried forever.
 AUTO_MAX_FAILURES = 3
 
+# 9mm drop + 6 x 15mm = 99mm, still clear of TRANSIT_Z_MM at 120.
+MAX_STACK_PARTS = 6
+PART_THICKNESS_MM = 15.0
+
 
 def score_object(confidence: float, area_px: int, depth_value: Optional[float], cfg: Dict[str, Any]) -> float:
     weights = cfg["pick_selection"]
@@ -262,6 +266,13 @@ def main() -> None:
                     auto_mode = False
                 elif candidates:
                     auto_empty_frames = 0
+                    if picks_done >= MAX_STACK_PARTS:
+                        print(f"[AUTO] Drop stack full after {picks_done} parts.")
+                        send_home()
+                        send_popup(f"Drop stack full - {picks_done} parts. Empty it.")
+                        auto_mode = False
+                        frame_idx += 1
+                        continue
                     best = max(candidates, key=lambda c: c["score"])
                     p = best["pose"]
                     x_mm, y_mm = pixel_to_mm(H, p.center_x, p.center_y)
@@ -282,6 +293,7 @@ def main() -> None:
                         ry=GRIPPER_RY,
                         rz=rz,
                         approach_z_mm=APPROACH_Z_MM,
+                        drop_z_offset_mm=picks_done * PART_THICKNESS_MM,
                     )
 
                     if status is None:
@@ -355,6 +367,7 @@ def main() -> None:
                 auto_mode = False
                 auto_empty_frames = 0
                 auto_failures = 0
+                picks_done = 0
                 try:
                     send_stop()
                     send_vacuum_off()
@@ -390,6 +403,7 @@ def main() -> None:
                     print("[AUTO] ON - cycling until the bin is empty. "
                           "Press 'a' again or 'q' to stop. Hand on the e-stop.")
                     # Start from a known pose so the first detection is clean.
+                    picks_done = 0
                     send_home()
                     flush_camera(cap, 5)
                 else:
